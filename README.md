@@ -24,21 +24,36 @@ Save as `ws_server.py`. This opens a WebSocket server that receives JSON message
 import asyncio
 import json
 import websockets
-from langchain_ollama import Ollama
+from langchain_ollama import ChatOllama
 
-# Configure the model name (adjust to your Ollama model)
-llm = Ollama(model="llama2")  # change model name if needed
+MODEL = "gpt-oss:20b"
+BASE_URL = "http://10.101.80.10:11434"
+TEMPERATURE = 0
 
-async def handler(websocket, path):
+# Initialize the model once
+llm = ChatOllama(
+    model=MODEL,
+    temperature=TEMPERATURE,
+    base_url=BASE_URL,
+)
+
+# single-argument handler, compatible with websockets>=11
+async def handler(websocket):
     async for message in websocket:
         try:
             data = json.loads(message)
             prompt = data.get("prompt", "")
-            # Run LLM call in executor to avoid blocking the event loop
+
+            # Run blocking LLM call in a thread so event loop stays responsive
             loop = asyncio.get_running_loop()
-            output = await loop.run_in_executor(None, llm, prompt)
+            ai_msg = await loop.run_in_executor(None, llm.invoke, prompt)
+
+            # ai_msg is usually an AIMessage; fall back to str just in case
+            output = getattr(ai_msg, "content", str(ai_msg))
+
             await websocket.send(json.dumps({"output": output}))
         except Exception as e:
+            # Send error back to the client instead of crashing the server
             await websocket.send(json.dumps({"error": str(e)}))
 
 async def main():
@@ -69,7 +84,14 @@ async def main():
         prompt = "Write a short haiku about programming."
         await ws.send(json.dumps({"prompt": prompt}))
         resp = await ws.recv()
-        print("Response:", resp)
+        print("Raw response:", resp)
+
+        # Optional: parse JSON
+        data = json.loads(resp)
+        if "error" in data:
+            print("Server error:", data["error"])
+        else:
+            print("Model output:", data["output"])
 
 if __name__ == "__main__":
     asyncio.run(main())
