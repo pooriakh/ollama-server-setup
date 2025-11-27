@@ -106,3 +106,82 @@ python ws_client.py
 - Adjust the Ollama/model configuration as required by your environment (local Ollama daemon, remote host, or different model name).
 - The example uses blocking LLM calls executed in an executor to keep the WebSocket loop responsive. For streaming or async LLM clients, integrate streaming handlers as appropriate.
 - Add authentication, input validation, and rate limiting before exposing the server to untrusted networks.
+
+## Running server on GPU host and client from a CPU host
+
+In this setup:
+
+- `ws_server.py` runs on the **GPU server** (where Ollama + L40S GPUs live).
+- `ws_client.py` runs on a **CPU server** that has a public IP.
+- We use a **reverse SSH tunnel** so that the CPU server can access the WebSocket server on the GPU box.
+
+### 1. Start the WebSocket server on the GPU host
+
+From the GPU machine:
+
+```bash
+# In foreground (for debugging)
+python3 /home/kiss-ap3/llm/Hands-On-Large-Language-Models/websockets/ws_server.py
+````
+
+To keep it running after logout, use `nohup`:
+
+```bash
+nohup python3 /home/kiss-ap3/llm/Hands-On-Large-Language-Models/websockets/ws_server.py \
+  > ~/nohup_ollama_ws.log 2>&1 &
+```
+
+This starts `ws_server.py` in the background and writes all output to `~/nohup_ollama_ws.log`.
+
+### 2. Create a reverse SSH tunnel from GPU → CPU host
+
+Still on the GPU machine, create a reverse tunnel to the CPU machine (`kiss-final@157.90.94.114`) so that port `20300` on the CPU host forwards to port `8765` (the WebSocket server) on the GPU host:
+
+```bash
+ssh -N \
+  -R 0.0.0.0:20300:127.0.0.1:8765 \
+  -p 22901 \
+  -i ~/.ssh/id_ed25519 \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  kiss-final@157.90.94.114
+```
+
+To keep the tunnel alive after logout, again use `nohup`:
+
+```bash
+nohup ssh -N \
+  -R 0.0.0.0:20300:127.0.0.1:8765 \
+  -p 22901 \
+  -i ~/.ssh/id_ed25519 \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  kiss-final@157.90.94.114 \
+  > ~/nohup_ssh_tunnel.log 2>&1 &
+```
+
+Now, on the CPU host, the WebSocket server is reachable at `ws://localhost:20300`.
+
+
+### 3. Summary of “extra info”
+
+You basically added:
+
+1. **Background execution** (`nohup ... &`) for:
+
+   * The WebSocket server (`ws_server.py`) on the GPU host.
+   * The reverse SSH tunnel from GPU → CPU.
+
+2. **Reverse SSH tunneling** so that:
+
+   * You don’t expose the GPU node directly.
+   * The CPU node acts as a “portal” on port `20300` to reach the GPU’s WebSocket server.
+
+3. A clear separation of roles:
+
+   * GPU host = heavy lifting (Ollama + `ws_server.py`).
+   * CPU host = lightweight `ws_client.py` + public entry point.
+
+If you want, I can also add a small diagram text block into the README to visualize “CPU 20300 ⇄ GPU 8765 ⇄ Ollama 11434”.
